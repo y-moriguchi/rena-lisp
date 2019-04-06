@@ -142,11 +142,23 @@
                                        capture))
                          (lambda (indexnew capturenew)
                            (cond (indexnew
-                                  (loop (+ count 1) indexnew capturenew))
+                                  (call-with-values
+                                      (lambda ()
+                                        (loop (+ count 1)
+                                              indexnew
+                                              capturenew))
+                                    (lambda (index2 capture2)
+                                      (if index2
+                                          (values index2 capture2)
+                                          (then (cdr pattern)
+                                                indexnew
+                                                capturenew)))))
                                  ((or (and maxcount (> count maxcount))
                                       (< count mincount))
                                   (values #f #f))
-                                 (else (values lastindex capture)))))
+                                 (else (then (cdr pattern)
+                                             lastindex
+                                             capture)))))
                        (then (cdr pattern) lastindex capture)))))
               (else
                (call-with-values

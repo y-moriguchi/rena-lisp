@@ -141,6 +141,11 @@
                                        lastindex
                                        capture))
                          (lambda (indexnew capturenew)
+                           (define (failed pattern lastindex capture)
+                             (if (or (and maxcount (> count maxcount))
+                                     (< count mincount))
+                                 (values #f #f)
+                                 (then pattern lastindex capture)))
                            (cond (indexnew
                                   (call-with-values
                                       (lambda ()
@@ -150,16 +155,43 @@
                                     (lambda (index2 capture2)
                                       (if index2
                                           (values index2 capture2)
-                                          (then (cdr pattern)
-                                                indexnew
-                                                capturenew)))))
-                                 ((or (and maxcount (> count maxcount))
-                                      (< count mincount))
-                                  (values #f #f))
-                                 (else (then (cdr pattern)
-                                             lastindex
-                                             capture)))))
+                                          (failed (cdr pattern)
+                                                  indexnew
+                                                  capturenew)))))
+                                 (else (failed (cdr pattern)
+                                               lastindex
+                                               capture)))))
                        (then (cdr pattern) lastindex capture)))))
+              ((and (pair? (car pattern))
+                    (eq? (caar pattern) 'times-nongreedy))
+               (let ((mincount (cadar pattern))
+                     (maxcount (caddar pattern)))
+                 (let loop ((count 0)
+                            (lastindex lastindex)
+                            (capture capture))
+                   (call-with-values
+                       (lambda ()
+                         (dispatch (cadddr (car pattern))
+                                   lastindex
+                                   capture))
+                     (lambda (indexnew capturenew)
+                       (cond ((and maxcount (> count maxcount))
+                              (values #f #f))
+                             ((< count mincount)
+                              (loop (+ count 1)
+                                    indexnew
+                                    capturenew))
+                             (else
+                              (call-with-values
+                                  (lambda () (then (cdr pattern)
+                                                   indexnew
+                                                   capturenew))
+                                (lambda (index2 capture2)
+                                  (if index2
+                                      (values index2 capture2)
+                                      (loop (+ count 1)
+                                            indexnew
+                                            capturenew)))))))))))
               (else
                (call-with-values
                    (lambda () (dispatch (car pattern) lastindex capture))
@@ -196,12 +228,14 @@
                 (else (values #f #f)))))
       (define (matchrange-cmp . chars)
         (lambda (lastindex capture)
-          (call-with-values
-              (lambda () (apply matchrange chars))
-            (lambda (indexnew capturenew)
-              (if indexnew
-                  (values #f #f)
-                  (values (+ lastindex 1) capture))))))
+          (if (>= lastindex (string-length matchstr))
+              (values #f #f)
+              (call-with-values
+                  (lambda () ((apply matchrange chars) lastindex capture))
+                (lambda (indexnew capturenew)
+                  (if indexnew
+                      (values #f #f)
+                      (values (+ lastindex 1) capture)))))))
       (define (matchstring str)
         (lambda (lastindex capture)
           (if (< (+ lastindex (string-length str) -1)
@@ -215,48 +249,71 @@
         (cond ((null? alist) (cons (cons obj val) '()))
               ((eqv? obj (caar alist)) (cons (cons obj val) (cdr alist)))
               (else (cons (car alist) (setassv obj val (cdr alist))))))
-      (define (re-capture name)
-        (lambda (pattern lastindex capture)
-          (call-with-values
-              (lambda () (dispatch pattern lastindex capture))
-            (lambda (indexnew capture)
-              (if indexnew
-                  (values indexnew
-                          (setassv name
-                                   (substring matchstr lastindex indexnew)
-                                   capture))
-                  (values #f #f))))))
+      (define (re-capture-start name)
+        (lambda (lastindex capture)
+          (values lastindex (setassv name lastindex capture))))
+      (define (re-capture-end name)
+        (lambda (lastindex capture)
+          (values lastindex
+                  (setassv name
+                           (substring matchstr
+                                      (cdr (assv name capture))
+                                      lastindex)
+                           capture))))
       (define (refer name)
         (lambda (lastindex capture)
           (let ((captured (assv name capture)))
             (if captured
                 ((matchstring (cdr captured)) lastindex capture)
                 (values #f #f)))))
+      (define (re-begin lastindex capture)
+        (if (<= lastindex 0)
+            (values lastindex capture)
+            (values #f #f)))
+      (define (re-end lastindex capture)
+        (if (>= lastindex (string-length matchstr))
+            (values lastindex capture)
+            (values #f #f)))
       (define (dispatch pattern lastindex capture)
         (cond ((null? pattern) (values lastindex capture))
               ((char? pattern)
                ((matchchar pattern pattern) lastindex capture))
               ((string? pattern)
                ((matchstring pattern) lastindex capture))
+              ((eq? pattern 'begin) (re-begin lastindex capture))
+              ((eq? pattern 'end) (re-end lastindex capture))
               ((not (pair? pattern)) (values #f #f))
               ((eq? (car pattern) 'or)
                (re-or (cdr pattern) lastindex capture))
-              ((eq? (car pattern) 'capture)
-               ((re-capture (cadr pattern)) (caddr pattern) lastindex capture))
+              ((eq? (car pattern) 'capture-start)
+               (let ((cap (re-capture-start (cadr pattern))))
+                 (cap lastindex capture)))
+              ((eq? (car pattern) 'capture-end)
+               (let ((cap (re-capture-end (cadr pattern))))
+                 (cap lastindex capture)))
               ((eq? (car pattern) 'refer)
                ((refer (cadr pattern)) lastindex capture))
               ((eq? (car pattern) 'range)
                ((apply matchrange (cdr pattern)) lastindex capture))
+              ((eq? (car pattern) 'range-complement)
+               ((apply matchrange-cmp (cdr pattern)) lastindex capture))
               (else (then pattern lastindex capture))))
       (call-with-values
           (lambda () (dispatch pattern lastindex '()))
-        (lambda (lastindex capture)
-          (if lastindex
-              (values matchstr lastindex capture)
+        (lambda (indexnew capture)
+          (if indexnew
+              (values (substring matchstr lastindex indexnew)
+                      indexnew
+                      capture)
               (values #f #f #f)))))
     result)
   (define (regex-parser)
     (define capture-count 1)
+    (define rr (delay (rena)))
+    (define renanum
+      (delay
+        (let ((r (force rr)))
+          (r 'one-or-more (r 'range #\0 #\9)))))
     (y-letrec
      (lambda (orr andr repeat element charset)
        (r
@@ -268,21 +325,72 @@
                  (r andr (lambda (match syn inh) (cons syn inh))))))
         (lambda (match syn inh) (cons 'or (reverse syn)))))
      (lambda (orr andr repeat element charset)
+       (define (checkcap syn)
+         (and (pair? syn)
+              (pair? (car syn))
+              (eq? (caar syn) 'capture-end)))
+       (define (remove-unary-or syn)
+         (cond ((null? syn) '())
+               ((and (pair? (car syn))
+                     (eq? (caar syn) 'or)
+                     (= (length (car syn)) 2))
+                (append (cadar syn)
+                        (remove-unary-or (cdr syn))))
+               (else (cons (car syn) (remove-unary-or (cdr syn))))))
        (r
         (r 'then
-           (r repeat (lambda (match syn inh) (list syn)))
+           (r repeat (lambda (match syn inh)
+                       (if (checkcap syn) syn (list syn))))
            (r 'zero-or-more
-              (r repeat (lambda (match syn inh) (cons syn inh)))))
-        (lambda (match syn inh) (reverse syn))))
+              (r repeat (lambda (match syn inh)
+                          (if (checkcap syn)
+                              (append syn inh)
+                              (cons syn inh))))))
+        (lambda (match syn inh) (reverse (remove-unary-or syn)))))
      (lambda (orr andr repeat element charset)
        (r 'then
           element
           (r 'maybe
              (r 'or
+                (r "*?" (lambda (match syn inh)
+                          (list 'times-nongreedy 0 #f syn)))
+                (r "+?" (lambda (match syn inh)
+                          (list 'times-nongreedy 1 #f syn)))
                 (r "*" (lambda (match syn inh)
                          (list 'times 0 #f syn)))
                 (r "+" (lambda (match syn inh)
-                         (list 'times 1 #f syn)))))))
+                         (list 'times 1 #f syn)))
+                (r
+                 (r 'then
+                    "{"
+                    (r (force renanum)
+                       (lambda (match syn inh)
+                         (list (string->number match) inh)))
+                    ","
+                    (r (force renanum)
+                       (lambda (match syn inh)
+                         (cons (string->number match) inh)))
+                    "}")
+                 (lambda (match syn inh)
+                   (list 'times (cadr syn) (car syn) (caddr syn))))
+                (r
+                 (r 'then
+                    "{"
+                    (r (force renanum)
+                       (lambda (match syn inh)
+                         (list (string->number match) inh)))
+                    ",}")
+                 (lambda (match syn inh)
+                   (list 'times (car syn) #f (cadr syn))))
+                (r
+                 (r 'then
+                    "{"
+                    (r (force renanum)
+                       (lambda (match syn inh)
+                         (list (string->number match) inh)))
+                    "}")
+                 (lambda (match syn inh)
+                   (list 'times (car syn) (car syn) (cadr syn))))))))
      (lambda (orr andr repeat element charset)
        (r 'or
           (r 'then "(?:" orr ")")
@@ -290,15 +398,23 @@
              (lambda (match syn inh)
                (let ((capcount capture-count))
                  (set! capture-count (+ capture-count 1))
-                 (list 'capture capcount syn))))
-          (r 'then "[" charset "]")
+                 (cons (list 'capture-end capcount)
+                       (cons syn (list (list 'capture-start capcount)))))))
+          (r (r 'then "[^" charset "]")
+             (lambda (match syn inh) (cons 'range-complement syn)))
+          (r (r 'then "[" charset "]")
+             (lambda (match syn inh) (cons 'range syn)))
+          (r "." (lambda (match syn inh)
+                   (list 'range-complement #\newline)))
+          (r "^" (lambda (match syn inh) 'begin))
+          (r "$" (lambda (match syn inh) 'end))
           (r
            (r 'then
               "\\"
-              (r (r 'range #\1 #\9)
+              (r (force renanum)
                  (lambda (match syn inh) (string->number match))))
            (lambda (match syn inh) (list 'refer syn)))
-          (r (r 'complement #\* #\+ #\| #\( #\))
+          (r (r 'complement #\* #\+ #\? #\| #\( #\) #\{)
              (lambda (match syn inh) (string-ref match 0)))))
      (lambda (orr andr repeat element charset)
        (r
@@ -316,7 +432,7 @@
                           (lambda (match syn inh)
                             (cons (list (car inh) (string-ref match 0))
                                   (cdr inh)))))))))
-        (lambda (match syn inh) (cons 'range syn))))))
+        (lambda (match syn inh) syn)))))
   (define (r . args)
     (define rr (delay (rena)))
     (define renanum

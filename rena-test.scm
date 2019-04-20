@@ -117,4 +117,69 @@
   (assert (r 'br) "\r\n" #f "\r\n" 2 #f)
   (assert (r 'br) "\r1" #f "\r" 1 #f)
   (assert (r 'br) "\n1" #f "\n" 1 #f)
-  (assert-not (r 'br) "rn"))
+  (assert-not (r 'br) "rn")
+  (assert (r 'equals-id "key") "keyno" #f "key" 3 #f))
+
+(let* ((r0 (rena))
+       (r (rena `(ignore ,(r0 'whitespace)))))
+  (assert (r 'then "765" "pro") "765 \tpro" #f "765 \tpro" 8 #f)
+  (assert (r 'then "765" "pro") "765pro" #f "765pro" 6 #f)
+  (assert (r 'times 0 #f "9") "9 9\t9\n9" #f "9 9\t9\n9" 7 #f)
+  (assert (r 'delimit "9" ",") "9, 9,\t9" #f "9, 9,\t9" 7 #f)
+  (assert-not (r 'equals-id "key") "keyno")
+  (assert (r 'equals-id "key") "key  no" #f "key" 3 #f))
+
+(let ((r (rena '(keys "+" "+=" "+-" "-" "*="))))
+  (assert (r 'key "+=") "+=" #f "+=" 2 #f)
+  (assert-not (r 'key "+=") "+-")
+  (assert-not (r 'key "+=") "+")
+  (assert (r 'key "+") "+" #f "+" 1 #f)
+  (assert-not (r 'key "+") "+=")
+  (assert (r 'key "-") "-" #f "-" 1 #f)
+  (assert (r 'key "-") "-=" #f "-" 1 #f)
+  (assert (r 'key "*=") "*=" #f "*=" 2 #f)
+  (assert-not (r 'key "*=") "*")
+  (assert-not (r 'equals-id "key") "keyno")
+  (assert (r 'not-key) "*" #f "" 0 #f)
+  (assert-not (r 'not-key) "*=")
+  (assert (r 'equals-id "key") "key-no" #f "key" 3 #f))
+
+(let* ((r0 (rena))
+       (r (rena `(ignore ,(r0 'whitespace))
+                '(keys "+" "+=" "+-" "-" "*="))))
+  (assert-not (r 'equals-id "key") "keyno")
+  (assert (r 'equals-id "key") "key  no" #f "key" 3 #f)
+  (assert (r 'equals-id "key") "key-no" #f "key" 3 #f))
+
+(let* ((r0 (rena))
+       (rr (rena `(ignore ,(r0 'whitespace)))))
+  (assert (rr 'delimit (rr 'real)
+              ","
+              (lambda (match syn inh) (+ syn inh)))
+          "765,346" 0 "765,346" 7 1111)
+  (letrec ((calc (rr 'y
+                    (lambda (term factor element)
+                      (rr 'then
+                          factor
+                          (rr 'zero-or-more
+                              (rr 'or
+                                  (rr 'then
+                                      "+"
+                                      (rr factor
+                                          (lambda (match syn inh)
+                                            (+ inh syn))))))))
+                    (lambda (term factor element)
+                      (rr 'then
+                          element
+                          (rr 'zero-or-more
+                              (rr 'or
+                                  (rr 'then
+                                      "*"
+                                      (rr element
+                                          (lambda (match syn inh)
+                                            (* inh syn))))))))
+                    (lambda (term factor element)
+                      (rr 'or
+                          (rr 'real)
+                          (rr 'then "(" term ")"))))))
+    (assert calc "11 + 2 *  3" #f "11 + 2 *  3" 11 17)))

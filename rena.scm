@@ -9,14 +9,14 @@
 (define (rena . opt)
   (define (ignore-opt)
     (let ((ignore (assq 'ignore opt)))
-      (if (or (not ignore) (not (cdr ignore)))
+      (if (or (not ignore) (not (cadr ignore)))
           #f
           ignore)))
   (define (indexignore str index0)
     (let ((ignore (ignore-opt)))
       (if ignore
           (call-with-values
-              (lambda () ((cdr ignore) str index0 #f))
+              (lambda () ((cadr ignore) str index0 #f))
             (lambda (match lastindex syn) (if match lastindex index0)))
           index0)))
   (define (substring-over string beginindex endindex)
@@ -204,10 +204,9 @@
       (if (< idx (string-length tomatch))
           (let* ((ch (string-ref tomatch idx))
                  (key (assv ch trie)))
-            (cond ((not key) #f)
-                  ((cdr key) (loop (+ idx 1) (cdr key)))
-                  (else (+ idx 1))))
-          #f)))
+            (cond (key (loop (+ idx 1) (cdr key)))
+                  (else (if (assv 'this trie) idx #f))))
+          (if (assv 'this trie) idx #f))))
   (define (match-keyword trie key tomatch index)
     (let ((result (search-keyword trie tomatch index)))
       (if (and result (eqv? (substring tomatch index result) key))
@@ -221,7 +220,7 @@
             (values #f #f #f)))))
   (define (rena-not-key trie)
     (lambda (match index attr)
-      (if (seatch-keyword trie match index)
+      (if (search-keyword trie match index)
           (values #f #f #f)
           (values "" index attr))))
   (define (rena-cond pred)
@@ -254,7 +253,7 @@
     (define renaspc
       (delay
         (let ((r (force rr)))
-          (r 'one-or-more (r 'or " " "\t" "\n")))))
+          (r 'one-or-more (r 'or " " "\t" "\n" "\r")))))
     (define renabr
       (delay
         (let ((r (force rr)))
@@ -263,7 +262,7 @@
       (define (equals-id str index attr)
         (define (match-ignore? ignore)
           (call-with-values
-              (lambda () ((cdr ignore) str index #f))
+              (lambda () ((cadr ignore) str index #f))
             (lambda (istr iindex iattr) istr)))
         (let ((ignore (ignore-opt)))
           (cond ((>= index (string-length str)) (values key index attr))
@@ -329,7 +328,7 @@
     (define (make-key idx)
       (if (< idx (string-length key))
           (list (cons (string-ref key idx) (make-key (+ idx 1))))
-          #f))
+          '((this . #t))))
     (define (make-trie trie idx)
       (cond ((null? trie) (make-key idx))
             (else (cons (car trie) (make-trie (cdr trie) idx)))))
